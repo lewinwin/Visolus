@@ -1,6 +1,7 @@
 import numpy as np
-from body_part_angle import BodyPartAngle
-from utils import *
+from AI.utils import detection_body_part
+from body_part_angle import *
+
 
 
 class TypeOfExercise(BodyPartAngle):
@@ -24,7 +25,7 @@ class TypeOfExercise(BodyPartAngle):
 
 
     def pull_up(self, counter, status):
-        nose = detection_body_part(self.landmarks, "NOSE")
+        nose = (self.landmarks, "NOSE")
         left_elbow = detection_body_part(self.landmarks, "LEFT_ELBOW")
         right_elbow = detection_body_part(self.landmarks, "RIGHT_ELBOW")
         avg_shoulder_y = (left_elbow[1] + right_elbow[1]) / 2
