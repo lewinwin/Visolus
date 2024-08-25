@@ -5,7 +5,6 @@ mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
 mp_pose = mp.solutions.pose
 
-# For webcam input:
 VIDEO_FILES = "VIDEO_FILES/20240604_192811.mp4"
 
 cap = cv2.VideoCapture(0)
@@ -25,7 +24,6 @@ with mp_pose.Pose(
     image = cv2.resize(image, (1280, 720))
 
     # To improve performance, optionally mark the image as not writeable to
-    # pass by reference.
     image.flags.writeable = False
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     results = pose.process(image)
