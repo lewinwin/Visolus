@@ -1,6 +1,6 @@
 import cv2
 import argparse
-from utils import *
+from AI.utils import *
 import mediapipe as mp
 from body_part_angle import BodyPartAngle
 from types_of_exercise import TypeOfExercise
