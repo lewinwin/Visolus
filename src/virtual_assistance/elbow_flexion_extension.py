@@ -3,19 +3,20 @@ import numpy as np
 import time
 import PoseModule as pm
 import pyttsx3
+import threading
+
+def speak(engine, text):
+    engine.say(text)
+    engine.runAndWait()
 
 cap = cv2.VideoCapture(0) 
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1200)
 cap.set(cv2.CAP_PROP_FPS, 60)
 
-current_step = 0
-current_count = 0
-
 engine = pyttsx3.init() 
 engine.setProperty('rate', 150)  # Speed of speech
 engine.setProperty('volume', 1)  # Volume level (0.0 to 1.0)
-engine.startLoop(False)
 
 detector = pm.poseDetector()
 count = 0
@@ -25,6 +26,7 @@ pTime = 0
 last_feedback = None
 feedback_cooldown = 2  # Cooldown time in seconds
 last_feedback_time = 0
+speech_thread = None
 
 while True:
     success, img = cap.read()
@@ -77,26 +79,22 @@ while True:
 
             cv2.rectangle(img, (1100, 100), (1175, 650), color, 3)
             cv2.rectangle(img, (1100, int(bar)), (1175, 650), color, cv2.FILLED)
-            cv2.putText(img, f'{int(per)} %', (1100, 75), cv2.FONT_HERSHEY_PLAIN, 4,
-                        color, 4)
+            cv2.putText(img, f'{int(per)} %', (1100, 75), cv2.FONT_HERSHEY_PLAIN, 4, color, 4)
 
-            # cv2.rectangle(img, (0, 450), (250, 720), (52, 199, 89), cv2.FILLED)
             cv2.putText(img, str(int(count)), (45, 670), cv2.FONT_HERSHEY_PLAIN, 15, (52, 199, 89), 25)
     
-    # Speak feedback if necessary
     if feedback and (feedback != last_feedback or (current_time - last_feedback_time) > feedback_cooldown):
-        engine.say(feedback)
+        if speech_thread is None or not speech_thread.is_alive():  
+            speech_thread = threading.Thread(target=speak, args=(engine, feedback))
+            speech_thread.start()
         last_feedback = feedback
         last_feedback_time = current_time
     
-    engine.iterate()  # Process the speech queue
-    
-    if cv2.waitKey(1) & 0xFF == ord('q'):  # for Mac
+    if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
     cv2.imshow("Image", img)
     cv2.waitKey(1)
 
-engine.endLoop()
 cap.release()
 cv2.destroyAllWindows()
