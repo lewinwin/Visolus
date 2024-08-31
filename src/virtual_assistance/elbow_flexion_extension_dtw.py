@@ -113,7 +113,7 @@ while True:
                 if per == 0:
                     dir = 0
                     count += 0.5
-                    feedback = "Good Job! Now flex your right elbow again."
+                    feedback = "Good Job!"
                 else:
                     feedback = "Straighten your right arm more."
 
