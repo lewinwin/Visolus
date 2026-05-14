@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run AI main",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\src\\AI\\main.py",
+      "console": "integratedTerminal",
+      "args": ["-t", "squat"],
+      "cwd": "${workspaceFolder}",
+      "python": "C:\\Program Files\\Python312\\python.exe"
+    }
+  ]
+}

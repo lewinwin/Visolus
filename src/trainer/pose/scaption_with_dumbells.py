@@ -3,15 +3,10 @@ import numpy as np
 import time
 import PoseModule as pm
 import matplotlib.pyplot as plt
+from video_source import open_video_source, parse_video_args, should_stop_for_key
 
-def video_processing():
-    # Open the webcam
-    # cap = cv2.VideoCapture("Visolus/VIDEO_FILES/shoulders & arms/neural-lide_median_bias.mp4")
-    cap = cv2.VideoCapture(0)
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1200)
-    cap.set(cv2.CAP_PROP_FPS, 60)
+def video_processing(source="0", no_display=False, max_frames=0):
+    cap = open_video_source(source)
 
     # Initialize the pose detector
     detector = pm.poseDetector()
@@ -23,10 +18,14 @@ def video_processing():
     joint_coords_1 = []
     joint_coords_2 = []
     joint_coords_3 = []
+    frame_count = 0
 
     while True:
         success, img = cap.read()
+        if not success or img is None:
+            break
 
+        frame_count += 1
         img = detector.findPose(img, False)
         lmList = detector.findPosition(img, False)
         
@@ -45,16 +44,25 @@ def video_processing():
         fps = 1 / (cTime - pTime)
         pTime = cTime
 
-        cv2.imshow("Image", img)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if not no_display:
+            cv2.imshow("Image", img)
+            if should_stop_for_key():
+                break
+
+        if max_frames and frame_count >= max_frames:
             break
 
     cap.release()
     cv2.destroyAllWindows()
+    print(f"Processed {frame_count} frame(s).")
 
     return joint_coords_1, joint_coords_2, joint_coords_3
 
 def plot_joint_coords(joint_coords_1, joint_coords_2, joint_coords_3):
+    if not joint_coords_1 or not joint_coords_2 or not joint_coords_3:
+        print("No pose landmarks were detected, so there is nothing to plot.")
+        return
+
     plt.figure(figsize=(10, 5))
 
     # Plot joint 1
@@ -85,5 +93,11 @@ def plot_joint_coords(joint_coords_1, joint_coords_2, joint_coords_3):
     plt.show()
 
 if __name__ == "__main__":
-    joint_coords_1, joint_coords_2, joint_coords_3 = video_processing()
-    plot_joint_coords(joint_coords_1, joint_coords_2, joint_coords_3)
+    args = parse_video_args("Run scaption with dumbbells pose detection.")
+    joint_coords_1, joint_coords_2, joint_coords_3 = video_processing(
+        source=args.source,
+        no_display=args.no_display,
+        max_frames=args.max_frames,
+    )
+    if not args.no_display:
+        plot_joint_coords(joint_coords_1, joint_coords_2, joint_coords_3)

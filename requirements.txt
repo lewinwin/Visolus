@@ -1,0 +1,12 @@
+opencv-python
+mediapipe
+numpy
+pandas
+cvzone
+pyttsx3
+fastdtw
+scipy
+matplotlib
+pillow
+requests
+tqdm
