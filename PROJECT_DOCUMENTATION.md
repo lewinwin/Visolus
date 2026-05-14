@@ -33,6 +33,335 @@ Core stack:
 
 Dependencies are listed in `requirements.txt`.
 
+## Technical Architecture
+
+Visolus is not structured as one single packaged application yet. It is a collection of related prototypes that share the same core pipeline:
+
+```text
+camera/video frame
+  -> OpenCV capture
+  -> BGR to RGB conversion
+  -> MediaPipe Pose detection
+  -> landmark extraction
+  -> joint angle calculation
+  -> exercise-specific rule logic
+  -> repetition count and feedback
+  -> OpenCV drawing / text-to-speech / DTW comparison
+```
+
+The most reusable parts are:
+
+- `PoseModule.py` files: wrap MediaPipe pose detection, landmark extraction, and angle calculation.
+- `src/trainer/pose/video_source.py`: handles camera/video input arguments for trainer scripts.
+- `src/AI/utils.py`: provides normalized landmark lookup, angle calculation, and overlay helpers for the generic AI counter.
+- `src/AI/body_part_angle.py`: groups common joint-angle calculations.
+- `src/AI/types_of_exercise.py`: maps exercise names to rule-based counters.
+
+There are three main runtime styles:
+
+- Direct webcam scripts: open `cv2.VideoCapture(0)` and run until the user presses a key.
+- Trainer scripts: accept `--source`, `--no-display`, and `--max-frames` so they can process webcam input or stored videos.
+- Colab classification scripts: work with uploaded videos, CSV pose samples, pose embeddings, classification smoothing, and output video rendering.
+
+## Runtime Data Flow
+
+### Frame Format
+
+OpenCV reads frames as BGR images. MediaPipe expects RGB images. Most scripts convert the frame before calling MediaPipe and then convert it back for OpenCV display:
+
+```python
+frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+results = pose.process(frame)
+frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+```
+
+The custom `PoseModule.py` wrappers hide this detail inside `findPose()`:
+
+```python
+imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+self.results = self.pose.process(imgRGB)
+```
+
+### Landmark Formats
+
+The repository uses two landmark formats.
+
+MediaPipe raw landmark objects:
+
+```text
+landmark.x          normalized x coordinate, usually 0.0 to 1.0
+landmark.y          normalized y coordinate, usually 0.0 to 1.0
+landmark.z          depth-like relative coordinate
+landmark.visibility probability-like visibility score
+```
+
+Custom `PoseModule` landmark lists:
+
+```text
+[id, x_pixel, y_pixel]
+[id, x_pixel, y_pixel, visibility]
+```
+
+The trainer and pose-estimation modules mostly use pixel coordinates. The virtual-assistance module includes visibility so it can warn the user when the required limb is not visible.
+
+### Coordinate Systems
+
+Important coordinate details:
+
+- OpenCV image origin is at the top-left corner.
+- Positive `x` goes right.
+- Positive `y` goes down.
+- MediaPipe normalized coordinates are converted to pixel coordinates with `int(lm.x * width)` and `int(lm.y * height)`.
+- The 3D motion capture export flips `y` with `img.shape[0] - lm[2]` so the saved animation data is easier to use in Unity-style coordinates.
+
+## Angle Math
+
+The project calculates the angle at the middle landmark `b` from three points `a`, `b`, and `c`.
+
+Conceptually:
+
+```text
+angle = direction(b -> c) - direction(b -> a)
+```
+
+The Python implementation uses `atan2`:
+
+```python
+radians = np.arctan2(c[1] - b[1], c[0] - b[0]) - np.arctan2(a[1] - b[1], a[0] - b[0])
+angle = abs(radians * 180.0 / np.pi)
+if angle > 180.0:
+    angle = 360 - angle
+```
+
+Some `PoseModule.findAngle()` versions return angles in the `0` to `360` range instead:
+
+```python
+angle = math.degrees(math.atan2(y3 - y2, x3 - x2) - math.atan2(y1 - y2, x1 - x2))
+if angle < 0:
+    angle += 360
+```
+
+This is why angle thresholds differ between modules. For example, elbow flexion in the trainer script maps an angle range of roughly `210` to `310`, while the generic AI module works with normalized smaller angles from `calculate_angle()`.
+
+## Exercise Rule System
+
+The exercise logic is currently rule-based, not model-trained. Each movement defines:
+
+- The landmarks to track.
+- The joint angle to calculate.
+- A minimum and maximum angle range.
+- A percentage mapping from angle to progress.
+- A movement direction state.
+- A count update rule.
+
+Example from elbow flexion/extension:
+
+```python
+angle = detector.findAngle(img, 12, 14, 16)
+per = np.interp(angle, (210, 310), (0, 100))
+```
+
+The repetition state machine is:
+
+```text
+dir = 0 means waiting for the movement to reach one end
+dir = 1 means waiting for the movement to return
+count += 0.5 at each completed half movement
+int(count) is displayed as full repetitions
+```
+
+This simple approach is easy to understand and fast enough for real-time camera use. The tradeoff is that thresholds must be tuned for each exercise, camera angle, and body orientation.
+
+## Exercise Thresholds Used In This Project
+
+The current exercise scripts use these main angle mappings:
+
+| Exercise | File | Landmarks | Angle Range | Percent Mapping |
+|---|---|---:|---:|---:|
+| Right elbow flexion/extension | `src/trainer/pose/elbow_flexion_extension.py` | `12, 14, 16` | `210` to `310` | `0` to `100` |
+| Right knee flexion/extension | `src/trainer/pose/knee_flexion_extension.py` | `24, 26, 28` | `190` to `270` | `100` to `0` after inversion |
+| Cross-arm stretch | `src/trainer/pose/cross_arm_stretch.py` | `11, 12, 14` | `10` to `100` | `100` to `0` after inversion |
+| Scaption with dumbbells voice | `src/trainer/pose/scaption_with_dumbbells_voice.py` | `24, 12, 14` and `23, 11, 13` | mixed ranges | average of both arms/sides |
+
+The generic AI counter uses these approximate thresholds:
+
+| Exercise | Main Signal | Count Condition | Reset Condition |
+|---|---|---|---|
+| `push-up` | average arm angle | angle `< 70` | angle `> 160` |
+| `squat` | average leg angle | angle `< 70` | angle `> 160` |
+| `sit-up` | abdomen angle | angle `< 55` | angle `> 105` |
+| `walk` | left/right knee x position | knee crosses one way | knee crosses back |
+| `pull-up` | nose vs elbow height | nose passes elbow level | nose returns above elbow level |
+
+## Module Import Behavior
+
+Many scripts import local files by name:
+
+```python
+import PoseModule as pm
+from video_source import open_video_source
+```
+
+This works when the script is run from its own folder context or when Python places the script folder on `sys.path`. It also means files with the same name in different folders are separate modules:
+
+- `src/pose_estimation/PoseModule.py`
+- `src/trainer/pose/PoseModule.py`
+- `src/virtual_assistance/PoseModule.py`
+
+The `src/AI/main.py` file adds `src` to `sys.path` so it can import `AI.utils`, but it also imports `types_of_exercise` as a local module. If imports fail, run scripts from the project root first, then check whether the script expects local-folder imports.
+
+## Threading And Voice Feedback
+
+Voice feedback can block video processing if `engine.runAndWait()` is called directly inside the frame loop. The assistant scripts reduce this by running speech in a separate thread:
+
+```python
+speech_thread = threading.Thread(target=speak, args=(engine, feedback))
+speech_thread.start()
+```
+
+The feedback cooldown prevents repeated speech every frame:
+
+```text
+if feedback is new or cooldown expired:
+    speak feedback
+```
+
+Common voice-related state:
+
+- `last_feedback`: the previous spoken feedback.
+- `feedback_cooldown`: minimum seconds before repeating feedback.
+- `last_feedback_time`: timestamp of last feedback.
+- `speech_thread`: current speech worker.
+
+## DTW Technical Details
+
+The DTW workflow compares a short live movement window against a stored reference sequence.
+
+Reference data shape:
+
+```text
+frames x selected_landmarks x coordinates
+```
+
+For elbow flexion/extension, each frame stores:
+
+```text
+[(right_shoulder_x, right_shoulder_y),
+ (right_elbow_x, right_elbow_y),
+ (right_wrist_x, right_wrist_y)]
+```
+
+Before DTW, the scripts flatten the selected landmark frames:
+
+```python
+current_landmarks = np.array([
+    np.array(point).flatten()
+    for frame in landmark_history
+    for point in frame
+])
+```
+
+Then `fastdtw` computes a distance:
+
+```python
+distance, path = fastdtw(current_landmarks, flattened_reference, dist=euclidean)
+```
+
+Current feedback rule:
+
+```text
+distance > 100 -> "Try to follow the reference movement more closely."
+distance <= 100 -> "Good form!"
+```
+
+Technical limitations:
+
+- The DTW threshold is hard-coded.
+- Coordinates are raw pixels, so camera distance and frame size affect the distance.
+- Only selected landmarks are compared.
+- The reference `.npy` path is relative to the current working directory.
+
+Better future DTW design would normalize landmarks by shoulder width, torso size, or frame dimensions before comparison.
+
+## Colab Classification Pipeline Details
+
+The Google Colab folder implements a different approach from the rule-based trainers. Instead of manually checking angle thresholds, it creates pose embeddings and classifies each frame against labeled pose samples.
+
+Pipeline:
+
+```text
+labeled images
+  -> MediaPipe landmarks
+  -> CSV rows
+  -> normalized pose embeddings
+  -> nearest-neighbor classification
+  -> EMA smoothing
+  -> repetition counter
+  -> visualization overlay
+```
+
+CSV sample format:
+
+```text
+sample_name,x1,y1,z1,x2,y2,z2,...,x33,y33,z33
+```
+
+Pose embedding design:
+
+- Centers the body around the hips.
+- Scales landmarks by body size.
+- Uses pairwise distances between major landmarks.
+- Checks both original and horizontally flipped poses to reduce left/right sensitivity.
+
+Classifier behavior:
+
+- First filters samples using maximum distance.
+- Then ranks remaining samples using mean distance.
+- Counts nearest class labels.
+- Returns a dictionary such as `{"pushups_down": 8, "pushups_up": 2}`.
+
+Smoothing behavior:
+
+- Keeps a recent window of classification dictionaries.
+- Applies exponential moving average.
+- Reduces jitter between adjacent frames.
+
+Counter behavior:
+
+- Uses an enter threshold and exit threshold.
+- Counts one repetition when the target pose confidence exits after entering.
+
+## Performance Considerations
+
+Real-time performance depends on:
+
+- Camera resolution and FPS.
+- MediaPipe `model_complexity`.
+- Whether landmarks are drawn every frame.
+- Whether text-to-speech blocks the frame loop.
+- Whether Matplotlib plotting is used.
+
+Most webcam scripts request:
+
+```python
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1200)
+cap.set(cv2.CAP_PROP_FPS, 60)
+```
+
+If performance is poor, lower the capture size, disable drawing, or use video files with `--no-display` for testing.
+
+## Known Technical Caveats
+
+- `__pycache__` files are committed in the current repository history, but they are generated files and normally do not need to be tracked.
+- There are repeated `PoseModule.py` implementations. A future refactor could centralize this into one shared module.
+- Some older scripts use hard-coded paths such as `Visolus/...`, which may fail depending on the current working directory.
+- Some comments and strings in older files show encoding artifacts from non-UTF-8 text.
+- `src/AI/types_of_exercise.py` has a likely copy/paste issue in `push_up()` where both arm angles call `angle_of_the_left_arm()`.
+- `src/AI/types_of_exercise.py` has a likely issue in `pull_up()` where `nose = (self.landmarks, "NOSE")` does not call `detection_body_part()`.
+- Angle thresholds are tuned manually and may need recalibration for different users, cameras, and video perspectives.
+- The DTW implementation uses raw pixel coordinates, so it is sensitive to body scale and camera position.
+
 ## Repository Layout
 
 ```text
